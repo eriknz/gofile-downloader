@@ -10,7 +10,7 @@ from platform import system
 from hashlib import sha256
 from uuid import uuid4
 from shutil import move, rmtree
-
+import time
 
 NEW_LINE: str = "\n" if system() != "Windows" else "\r\n"
 
@@ -46,38 +46,43 @@ def _print(_str: str) -> None:
 # increase max_workers for parallel downloads
 # defaults to 5 download at time
 class Main:
-    def __init__(self, url: str, password: str | None = None, max_workers: int = 5) -> None:
+    def __init__(self, urls_file: str, password: str | None = None, max_workers: int = 5) -> None:
+        # Read the text file containing the URLs
+        with open(urls_file, 'r') as f:
+            urls = f.read().splitlines()
 
+        # Download the files from each URL
+        for url in urls:
+            try:
+                if not url.split("/")[-2] == "d":
+                    die(f"The url probably doesn't have an id in it: {url}")
 
-        try:
-            if not url.split("/")[-2] == "d":
-                die(f"The url probably doesn't have an id in it: {url}")
+                self._id: str = url.split("/")[-1]
+            except IndexError:
+                die(f"Something is wrong with the url: {url}.")
 
-            self._id: str = url.split("/")[-1]
-        except IndexError:
-            die(f"Something is wrong with the url: {url}.")
+            self._downloaddir: str | None = getenv("GF_DOWNLOADDIR")
 
+            if self._downloaddir and path.exists(self._downloaddir):
+                chdir(self._downloaddir)
 
-        self._downloaddir: str | None = getenv("GF_DOWNLOADDIR")
+            self._root_dir: str = path.join(getcwd(), self._id)
+            self._token: str = self._getToken()
+            self._url: str = f"https://api.gofile.io/getContent?contentId={self._id}&token={self._token}&websiteToken=7fd94ds12fds4&cache=true"
+            self._password: str | None = sha256(password.encode()).hexdigest() if password else None
+            self._max_workers: int = max_workers
 
-        if self._downloaddir and path.exists(self._downloaddir):
-            chdir(self._downloaddir)
+            # list of files and its respective path, uuid, filename and link
+            self._files_link_list: List[Dict] = []
 
-        self._root_dir: str = path.join(getcwd(), self._id)
-        self._token: str = self._getToken()
-        self._url: str = f"https://api.gofile.io/getContent?contentId={self._id}&token={self._token}&websiteToken=7fd94ds12fds4&cache=true"
-        self._password: str | None = sha256(password.encode()).hexdigest() if password else None
-        self._max_workers: int = max_workers
+            self._createDir(self._id)
 
-        # list of files and its respective path, uuid, filename and link
-        self._files_link_list: List[Dict] = []
+            self._parseLinks(self._id, self._token, self._password)
 
-        self._createDir(self._id)
-
-        self._parseLinks(self._id, self._token, self._password)
-
-        self._threadedDownloads()
-
+            self._threadedDownloads()
+            
+            time.sleep(20)
+            
 
     def _threadedDownloads(self) -> None:
         """
@@ -92,7 +97,7 @@ class Main:
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             for item in self._files_link_list:
-                executor.submit(self._downloadContent, item, self._token)
+                executor.submit(self._downloadContent, item, self._token, self._id)
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             for item in self._files_link_list:
@@ -146,7 +151,7 @@ class Main:
 
 
     @staticmethod
-    def _downloadContent(file_info: Dict, token: str, chunk_size: int = 4096) -> None:
+    def _downloadContent(file_info: Dict, token: str, _id: str, chunk_size: int = 4096) -> None:
         """
         Download a file.
 
@@ -155,7 +160,7 @@ class Main:
         :param chunk_size: the number of bytes it should read into memory.
         :return:
         """
-
+        
 
         uuid: str = file_info["uuid"]
         filename: str = file_info["filename"]
@@ -208,9 +213,9 @@ class Main:
 
                     handler.write(chunk)
 
-                    _print(f"\rDownloading {filename}: {round(progress, 1)}%")
+                    _print(f"\rDownloading {_id} {filename}: {round(progress, 1)}%")
 
-                _print(f"\rDownloaded {filename}: 100.0%!" + NEW_LINE)
+                _print(f"\rDownloaded {_id} {filename}: 100.0%!" + NEW_LINE)
 
 
     def _parseLinks(self, _id: str, token: str, password: str | None = None) -> None:
@@ -255,7 +260,7 @@ class Main:
                     )
 
         else:
-            die(f"Failed to get a link as response from the {url}")
+            _print(f"Failed to get a link as response from the {url}")
 
 
 if __name__ == '__main__':
@@ -263,13 +268,13 @@ if __name__ == '__main__':
         from sys import argv
 
 
-        url: str | None = None
+        urls_file: str | None = None
         password: str | None = None
 
         argc: int = len(argv)
 
         if argc > 1:
-            url = argv[1]
+            urls_file = argv[1]
 
             if argc > 2:
                 password = argv[2]
@@ -277,7 +282,7 @@ if __name__ == '__main__':
 
             # Run
             _print('Starting, please wait...' + NEW_LINE)
-            Main(url=url, password=password)
+            Main(urls_file=urls_file, password=password)
         else:
             die("Usage:"
                 + NEW_LINE
